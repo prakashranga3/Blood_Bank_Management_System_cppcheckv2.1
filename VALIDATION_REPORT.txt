@@ -1,0 +1,43 @@
+BMS REQUESTED CHANGES - VALIDATION REPORT
+=========================================
+
+Completed checks in the available execution environment:
+
+1. Full application build with strict warnings treated as errors:
+   gcc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror -pthread
+   Result: PASS
+
+2. Targeted functional tests:
+   - Calendar date addition, including month and leap-year transitions
+   - Donation-created inventory expiry = donation date + 45 days
+   - Emergency request inserted into pending blood-request records
+   - Emergency notification targeted only to an active Blood Bank Staff user
+   - Existing ProcessNext request flow fulfills the emergency request
+   Result: PASS
+
+3. AddressSanitizer and UndefinedBehaviorSanitizer with leak detection:
+   Result: PASS for the targeted tests
+
+4. GCC static analyzer on modified C files:
+   common_validation.c, donation_management.c,
+   main_without_volunteer_appointments.c, api_reference.c
+   Result: PASS with zero diagnostics
+
+Tools not installed in this execution environment:
+- Cppcheck
+- Valgrind / Helgrind
+- A dedicated MISRA-C checker
+
+Run these in the approved project environment:
+
+  cppcheck --enable=warning,style,performance,portability \
+      --std=c11 --language=c --inconclusive *.c
+
+  valgrind --leak-check=full --show-leak-kinds=all \
+      --track-origins=yes ./bmsv21
+
+  valgrind --tool=helgrind ./bmsv21
+
+Use the organization's configured MISRA-C edition and deviation file for the
+final compliance decision. Compiler and sanitizer results cannot by themselves
+certify full MISRA compliance.
