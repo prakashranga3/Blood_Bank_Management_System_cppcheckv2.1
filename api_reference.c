@@ -207,6 +207,7 @@ void BmsReferencePublicApis(void)
     (void)ValidateContactNumber;
     (void)ValidateDate;
     (void)ValidateDateValue;
+    (void)BmsDateAddDays;
     (void)ValidateDonationId;
     (void)ValidateDonorId;
     (void)ValidateEmail;

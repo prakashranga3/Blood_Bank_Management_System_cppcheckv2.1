@@ -131,7 +131,7 @@ static BmsUiOperationResult_t AddInventory(BmsApplication_t *application);
 static void ListInventory(BmsApplication_t *application);
 static BmsUiOperationResult_t CheckAvailability(BmsApplication_t *application);
 static BmsUiOperationResult_t RecordDonation(BmsApplication_t *application,
-                                                   const BmsUser_t *staffUser);
+                                                        const BmsUser_t *user);
 static void ListDonations(BmsApplication_t *application);
 static BmsUiOperationResult_t CreateBloodRequest(BmsApplication_t *application,
                                                   const BmsUser_t *requester);
@@ -160,80 +160,12 @@ static uint32_t NextBloodId(const BmsApplication_t *application);
 static uint32_t NextDonationId(const BmsApplication_t *application);
 static uint32_t NextRequestId(const BmsApplication_t *application);
 static uint32_t NextAlertId(const BmsApplication_t *application);
+static uint32_t NextNotificationId(const BmsApplication_t *application);
 static uint32_t NextCampId(const BmsApplication_t *application);
-static bool IsLeapYear(uint32_t year);
-static uint32_t DaysInMonth(uint32_t year, uint32_t month);
-static bool AddDaysToDate(const BmsDate_t *sourceDate,
-                          uint32_t daysToAdd,
-                          BmsDate_t *resultDate);
+static BmsStatus_t NotifyBloodBankStaff(
+    BmsApplication_t *application,
+    const BmsEmergencyAlert_t *alert);
 
-
-
-static bool IsLeapYear(uint32_t year)
-{
-    if ((year % 400U) == 0U) { return true; }
-    if ((year % 100U) == 0U) { return false; }
-    return ((year % 4U) == 0U);
-}
-
-static uint32_t DaysInMonth(uint32_t year, uint32_t month)
-{
-    static const uint32_t days[12] =
-    {
-        31U, 28U, 31U, 30U, 31U, 30U,
-        31U, 31U, 30U, 31U, 30U, 31U
-    };
-    uint32_t result = 0U;
-
-    if ((month >= 1U) && (month <= 12U))
-    {
-        result = days[month - 1U];
-        if ((month == 2U) && IsLeapYear(year)) { result = 29U; }
-    }
-    return result;
-}
-
-static bool AddDaysToDate(const BmsDate_t *sourceDate,
-                          uint32_t daysToAdd,
-                          BmsDate_t *resultDate)
-{
-    BmsDate_t date;
-    uint32_t daysInMonth;
-
-    if ((sourceDate == NULL) || (resultDate == NULL)) { return false; }
-
-    daysInMonth = DaysInMonth(sourceDate->year, sourceDate->month);
-    if ((sourceDate->year == 0U) || (daysInMonth == 0U) ||
-        (sourceDate->day == 0U) || (sourceDate->day > daysInMonth))
-    {
-        return false;
-    }
-
-    date = *sourceDate;
-    while (daysToAdd > 0U)
-    {
-        daysInMonth = DaysInMonth(date.year, date.month);
-        if (date.day < daysInMonth)
-        {
-            ++date.day;
-        }
-        else
-        {
-            date.day = 1U;
-            if (date.month < 12U) { ++date.month; }
-            else
-            {
-                if (date.year == UINT32_MAX) { return false; }
-                date.month = 1U;
-                ++date.year;
-            }
-        }
-        --daysToAdd;
-    }
-
-    *resultDate = date;
-    return true;
-}
 
 static uint32_t NextIdFromList(const BmsLinkedList_t *list, size_t idOffset)
 {
@@ -257,6 +189,7 @@ static uint32_t NextBloodId(const BmsApplication_t *a) { return NextIdFromList(&
 static uint32_t NextDonationId(const BmsApplication_t *a) { return NextIdFromList(&a->donations.donations, offsetof(BmsDonation_t, donationId)); }
 static uint32_t NextRequestId(const BmsApplication_t *a) { return NextIdFromList(&a->requests.requests, offsetof(BmsBloodRequest_t, requestId)); }
 static uint32_t NextAlertId(const BmsApplication_t *a) { return NextIdFromList(&a->alerts.alertHistory, offsetof(BmsEmergencyAlert_t, alertId)); }
+static uint32_t NextNotificationId(const BmsApplication_t *a) { return NextIdFromList(&a->notifications.history, offsetof(BmsNotification_t, notificationId)); }
 static uint32_t NextCampId(const BmsApplication_t *a) { return NextIdFromList(&a->camps.camps, offsetof(BmsDonationCamp_t, campId)); }
 
 int main(void)
@@ -1902,7 +1835,10 @@ static BmsUiOperationResult_t AddInventory(BmsApplication_t *application)
     BmsBloodInventory_t record;
     uint32_t field = 0U;
 
-    if (application == NULL) { return BMS_UI_OPERATION_MENU; }
+    if (application == NULL)
+    {
+        return BMS_UI_OPERATION_MENU;
+    }
 
     (void)memset(&record, 0, sizeof(record));
     record.bloodId = NextBloodId(application);
@@ -1920,10 +1856,6 @@ static BmsUiOperationResult_t AddInventory(BmsApplication_t *application)
                 break;
             case 1U:
                 result = UiReadUint32("Units: ", &record.units);
-                if ((result == BMS_UI_VALUE) && (record.units == 0U))
-                {
-                    result = BMS_UI_INVALID;
-                }
                 break;
             case 2U:
                 result = UiReadDate("Collection date (YYYY-MM-DD): ",
@@ -1936,17 +1868,22 @@ static BmsUiOperationResult_t AddInventory(BmsApplication_t *application)
         HANDLE_FIELD_RESULT(result, field);
     }
 
-    if (!AddDaysToDate(&record.collectionDate, 45U, &record.expiryDate))
     {
-        (void)printf("Unable to calculate expiry date.\n");
-        return BMS_UI_OPERATION_DONE;
+        const BmsStatus_t dateStatus =
+            BmsDateAddDays(&record.collectionDate,
+                           BMS_RBC_SHELF_LIFE_DAYS,
+                           &record.expiryDate);
+        if (dateStatus != BMS_STATUS_OK)
+        {
+            PrintStatus("Calculate expiry date", dateStatus);
+            return BMS_UI_OPERATION_DONE;
+        }
     }
 
-    (void)printf("Expiry date: %04lu-%02lu-%02lu (auto-calculated)\n",
-                 (unsigned long)record.expiryDate.year,
-                 (unsigned long)record.expiryDate.month,
-                 (unsigned long)record.expiryDate.day);
-
+    (void)printf("Expiry date automatically calculated: %04u-%02u-%02u\n",
+                 record.expiryDate.year,
+                 record.expiryDate.month,
+                 record.expiryDate.day);
     PrintStatus("Add inventory",
                 BloodInventoryAddStock(&application->inventory, &record));
     return BMS_UI_OPERATION_DONE;
@@ -2013,28 +1950,22 @@ static BmsUiOperationResult_t CheckAvailability(BmsApplication_t *application)
 }
 
 static BmsUiOperationResult_t RecordDonation(BmsApplication_t *application,
-                                                   const BmsUser_t *staffUser)
+                                                        const BmsUser_t *user)
 {
     BmsDonation_t donation;
     uint32_t field = 0U;
 
-    if ((application == NULL) || (staffUser == NULL))
+    if ((application == NULL) || (user == NULL))
     {
         return BMS_UI_OPERATION_MENU;
     }
 
     (void)memset(&donation, 0, sizeof(donation));
     donation.donationId = NextDonationId(application);
-
-    /*
-     * Preserve the existing persisted structure: the old collectionHospitalId
-     * slot is populated automatically with the authenticated staff user ID.
-     */
-    donation.collectionHospitalId = staffUser->userId;
-
+    donation.collectionHospitalId = (BmsHospitalId_t)user->userId;
     PrintTitle("RECORD DONATION");
-    (void)printf("Blood Bank Staff ID: %lu (auto-linked)\n",
-                 (unsigned long)staffUser->userId);
+    (void)printf("Recorded by Blood Bank Staff ID: USR%06lu (auto-linked)\n",
+                 (unsigned long)user->userId);
     PrintNavigationHelp();
 
     while (field < 4U)
@@ -2050,10 +1981,6 @@ static BmsUiOperationResult_t RecordDonation(BmsApplication_t *application,
                 break;
             case 2U:
                 result = UiReadUint32("Units donated: ", &donation.units);
-                if ((result == BMS_UI_VALUE) && (donation.units == 0U))
-                {
-                    result = BMS_UI_INVALID;
-                }
                 break;
             case 3U:
                 result = UiReadDate("Donation date (YYYY-MM-DD): ",
@@ -2176,15 +2103,68 @@ static void ProcessNextRequest(BmsApplication_t *application)
     }
 }
 
+static BmsStatus_t NotifyBloodBankStaff(
+    BmsApplication_t *application,
+    const BmsEmergencyAlert_t *alert)
+{
+    BmsLinkedListNode_t *node;
+    BmsStatus_t status = BMS_STATUS_NOT_FOUND;
+    bool recipientFound = false;
+
+    if ((application == NULL) || (alert == NULL))
+    {
+        return BMS_STATUS_INVALID_ARGUMENT;
+    }
+
+    for (node = application->authentication.users.head;
+         node != NULL;
+         node = node->next)
+    {
+        const BmsUser_t *recipient = (const BmsUser_t *)node->data;
+        if ((recipient != NULL) &&
+            (recipient->role == BMS_ROLE_BLOOD_BANK_STAFF) &&
+            (recipient->status == BMS_USER_STATUS_ACTIVE) &&
+            recipient->isActive)
+        {
+            BmsNotification_t notification;
+            (void)memset(&notification, 0, sizeof(notification));
+            notification.notificationId = NextNotificationId(application);
+            notification.recipientUserId = recipient->userId;
+            notification.channel = BMS_NOTIFICATION_CHANNEL_CONSOLE;
+            notification.priority = BMS_PRIORITY_EMERGENCY;
+            (void)snprintf(
+                notification.message,
+                sizeof(notification.message),
+                "Emergency request REQ%06lu / ALT%06lu from HOS%06lu: "
+                "%u units %s - %.120s",
+                (unsigned long)alert->requestId,
+                (unsigned long)alert->alertId,
+                (unsigned long)alert->sourceHospitalId,
+                alert->requiredUnits,
+                BloodGroupToString(alert->bloodGroup),
+                alert->message);
+
+            status = NotificationManagementEnqueue(&application->notifications,
+                                                    &notification);
+            if (status != BMS_STATUS_OK)
+            {
+                return status;
+            }
+            recipientFound = true;
+        }
+    }
+
+    return recipientFound ? BMS_STATUS_OK : BMS_STATUS_NOT_FOUND;
+}
+
 static BmsUiOperationResult_t CreateEmergencyAlert(
     BmsApplication_t *application,
     const BmsUser_t *user)
 {
     BmsEmergencyAlert_t alert;
     BmsBloodRequest_t request;
-    BmsStatus_t status;
-    BmsLinkedListNode_t *node;
     uint32_t field = 0U;
+    BmsStatus_t status;
 
     if ((application == NULL) || (user == NULL) || (user->hospitalId == 0U))
     {
@@ -2196,14 +2176,18 @@ static BmsUiOperationResult_t CreateEmergencyAlert(
     (void)memset(&request, 0, sizeof(request));
 
     alert.alertId = NextAlertId(application);
+    alert.requestId = NextRequestId(application);
     alert.sourceHospitalId = user->hospitalId;
     alert.createdByUserId = user->userId;
     alert.priority = BMS_PRIORITY_EMERGENCY;
 
     PrintTitle("CREATE EMERGENCY ALERT");
-    (void)printf("Alert ID: ALT%06lu | Source Hospital: HOS%06lu\n",
+    (void)printf("Alert ID: ALT%06lu | Request ID: REQ%06lu | "
+                 "Source Hospital: HOS%06lu (auto-linked)\n",
                  (unsigned long)alert.alertId,
+                 (unsigned long)alert.requestId,
                  (unsigned long)alert.sourceHospitalId);
+    PrintNavigationHelp();
 
     while (field < 3U)
     {
@@ -2216,7 +2200,8 @@ static BmsUiOperationResult_t CreateEmergencyAlert(
             case 1U:
                 result = UiReadUint32("Required units: ",
                                       &alert.requiredUnits);
-                if ((result == BMS_UI_VALUE) && (alert.requiredUnits == 0U))
+                if ((result == BMS_UI_VALUE) &&
+                    (alert.requiredUnits == 0U))
                 {
                     result = BMS_UI_INVALID;
                 }
@@ -2233,64 +2218,35 @@ static BmsUiOperationResult_t CreateEmergencyAlert(
         HANDLE_FIELD_RESULT(result, field);
     }
 
-    status = EmergencyAlertManagementCreate(&application->alerts, &alert);
-    if (status != BMS_STATUS_OK)
-    {
-        PrintStatus("Create emergency alert", status);
-        return BMS_UI_OPERATION_DONE;
-    }
-
-    request.requestId = NextRequestId(application);
-    request.requesterId = user->userId;
-    request.requesterHospitalId = user->hospitalId;
+    request.requestId = alert.requestId;
+    request.requesterHospitalId = alert.sourceHospitalId;
+    request.requesterId = alert.createdByUserId;
     request.bloodGroup = alert.bloodGroup;
     request.requestedUnits = alert.requiredUnits;
-    request.fulfilledUnits = 0U;
     request.priority = BMS_PRIORITY_EMERGENCY;
     request.status = BMS_REQUEST_STATUS_PENDING;
 
     status = BloodRequestManagementCreate(&application->requests, &request);
+    PrintStatus("Create pending emergency request", status);
     if (status != BMS_STATUS_OK)
     {
-        PrintStatus("Create emergency blood request", status);
         return BMS_UI_OPERATION_DONE;
     }
 
-    node = application->authentication.users.head;
-    while (node != NULL)
+    status = EmergencyAlertManagementCreate(&application->alerts, &alert);
+    PrintStatus("Create emergency alert", status);
+    if (status != BMS_STATUS_OK)
     {
-        if (node->data != NULL)
-        {
-            const BmsUser_t *recipient = (const BmsUser_t *)node->data;
-            if (recipient->role == BMS_ROLE_BLOOD_BANK_STAFF)
-            {
-                BmsNotification_t notification;
-                (void)memset(&notification, 0, sizeof(notification));
-                notification.notificationId =
-                    alert.alertId + recipient->userId;
-                notification.recipientUserId = recipient->userId;
-                notification.priority = BMS_PRIORITY_EMERGENCY;
-                notification.channel = BMS_NOTIFICATION_CHANNEL_BROADCAST;
-                (void)snprintf(
-                    notification.message,
-                    sizeof(notification.message),
-                    "Emergency request REQ%06lu from HOS%06lu: "
-                    "%lu units %s - %.120s",
-                    (unsigned long)request.requestId,
-                    (unsigned long)alert.sourceHospitalId,
-                    (unsigned long)alert.requiredUnits,
-                    BloodGroupToString(alert.bloodGroup),
-                    alert.message);
-                (void)NotificationManagementEnqueue(
-                    &application->notifications,
-                    &notification);
-            }
-        }
-        node = node->next;
+        return BMS_UI_OPERATION_DONE;
     }
 
-    (void)printf("Emergency request REQ%06lu added to the blood-bank queue.\n",
-                 (unsigned long)request.requestId);
+    status = NotifyBloodBankStaff(application, &alert);
+    PrintStatus("Notify blood bank staff", status);
+    if (status == BMS_STATUS_OK)
+    {
+        (void)printf("Emergency request sent only to Blood Bank Staff.\n");
+    }
+
     return BMS_UI_OPERATION_DONE;
 }
 
@@ -2430,7 +2386,7 @@ static BmsStatus_t PrintDonationVisitor(const BmsDonation_t *donation,
     if (donation != NULL)
     {
         (void)printf("Donation ID:%u | Donor:%u | Group:%s | Units:%u | "
-                     "Date:%04u-%02u-%02u | Hospital:%u\n",
+                     "Date:%04u-%02u-%02u | RecordedByStaff:%u\n",
                      donation->donationId,
                      donation->donorId,
                      BloodGroupToString(donation->bloodGroup),

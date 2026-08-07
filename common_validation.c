@@ -358,6 +358,54 @@ bool ValidateDateValue(const BmsDate_t *date)
     return (date->day > 0U) && (date->day <= days);
 }
 
+BmsStatus_t BmsDateAddDays(const BmsDate_t *source,
+                           uint32_t daysToAdd,
+                           BmsDate_t *result)
+{
+    uint32_t index;
+
+    if ((source == NULL) || (result == NULL))
+    {
+        return BMS_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (!ValidateDateValue(source))
+    {
+        return BMS_STATUS_INVALID_DATA;
+    }
+
+    *result = *source;
+    for (index = 0U; index < daysToAdd; ++index)
+    {
+        const uint8_t daysInMonth =
+            UtilityDaysInMonth(result->year, result->month);
+
+        if (result->day < daysInMonth)
+        {
+            result->day = (uint8_t)(result->day + 1U);
+        }
+        else
+        {
+            result->day = 1U;
+            if (result->month < 12U)
+            {
+                result->month = (uint8_t)(result->month + 1U);
+            }
+            else
+            {
+                if (result->year == UINT16_MAX)
+                {
+                    return BMS_STATUS_INVALID_DATA;
+                }
+                result->month = 1U;
+                result->year = (uint16_t)(result->year + 1U);
+            }
+        }
+    }
+
+    return BMS_STATUS_OK;
+}
+
 bool ValidateDate(const char *date)
 {
     BmsDate_t parsed = {0U, 0U, 0U};

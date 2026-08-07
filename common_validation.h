@@ -47,6 +47,9 @@ bool ValidateWeight(uint32_t weightKg);
 
 bool ValidateDate(const char *date);
 bool ValidateDateValue(const BmsDate_t *date);
+BmsStatus_t BmsDateAddDays(const BmsDate_t *source,
+                           uint32_t daysToAdd,
+                           BmsDate_t *result);
 
 bool ValidateUserRole(uint8_t role);
 bool ValidateUserRoleValue(BmsUserRole_t role);

@@ -39,6 +39,7 @@ extern "C" {
 #define BMS_GRAPH_MAX_HOSPITALS           (128U)
 
 #define BMS_LOW_STOCK_THRESHOLD_UNITS     (5U)
+#define BMS_RBC_SHELF_LIFE_DAYS           (45U)
 #define BMS_MAX_BLOOD_UNITS               (100000U)
 #define BMS_MIN_DONOR_AGE                 (18U)
 #define BMS_MAX_DONOR_AGE                 (65U)
